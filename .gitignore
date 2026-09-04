@@ -1,0 +1,26 @@
+# 构建产物
+build/
+dist/
+*.spec
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 运行日志
+*.log
+
+# 本机配置 (含注册表开机启动状态, 不应提交)
+hotkeys.json
+
+# 本机启动脚本 (含绝对路径)
+run.bat
+
+# 虚拟环境
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
