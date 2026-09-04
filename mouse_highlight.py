@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """鼠标指示工具 (Windows) — 白手套定位器
 
-依赖: tkinter + Pillow + pywin32 + numpy。
+依赖: tkinter + Pillow + pywin32。
 
 行为:
   1. 极简控制面板(可拖动): 标题栏 + 热键设置 + 退出按钮。
@@ -42,12 +42,6 @@ try:
     HAS_PYWIN32 = True
 except Exception:
     HAS_PYWIN32 = False
-
-try:
-    import numpy as np
-    HAS_NUMPY = True
-except Exception:
-    HAS_NUMPY = False
 
 # ====== 配置 (按需修改) ======
 GLOVE_H = 130          # 手套显示高度(px)
@@ -283,42 +277,55 @@ def hotkey_loop(key):
 
 # ================= 手套图处理 =================
 
-def _find_fingertip_np(arr):
-    """numpy 版食指尖端检测。
+def _find_fingertip(im):
+    """食指尖端检测 (纯 PIL/Python, 无 numpy 依赖)。
 
     手套图中食指朝正上方(顶部那根竖直手指), 指尖 = 顶部手指区域的最上端中心。
     算法: 找每一列的最上不透明像素; 全局最小 y 即指尖高度; 在顶部 40px
     薄带内取不透明像素的 x 中点作为指尖 x。
-    arr: (H, W, 4) RGBA uint8 数组。返回归一化 (x, y)。
+    im: PIL Image (RGBA)。返回归一化 (x, y)。
     """
-    alpha = arr[..., 3]
-    mask = alpha > 100
-    if not mask.any():
-        return 0.5, 0.0
-    h, w = alpha.shape
+    w, h = im.size
+    px = im.load()
     # 每一列最上的不透明像素 y
-    topmost_y = np.full(w, h, dtype=np.int32)
+    topmost_y = [h] * w
     for x in range(w):
-        ys = np.nonzero(mask[:, x])[0]
-        if len(ys):
-            topmost_y[x] = ys.min()
-    global_min_y = int(topmost_y.min())
+        for y in range(h):
+            if px[x, y][3] > 100:
+                topmost_y[x] = y
+                break
+    global_min_y = min(topmost_y)
     # 顶部薄带(指尖附近 40px)
-    band = global_min_y + 40
-    ys_t, xs_t = np.nonzero(mask[:band, :])
-    if len(xs_t) == 0:
-        ys_t, xs_t = np.nonzero(mask)
-    tip_y = int(ys_t.min())
-    tip_xs = xs_t[ys_t == tip_y]
-    tip_x = int(tip_xs.mean())
+    band = min(global_min_y + 40, h)
+    tip_xs = []
+    tip_y = h
+    for y in range(band):
+        for x in range(w):
+            if px[x, y][3] > 100:
+                if y < tip_y:
+                    tip_y = y
+                    tip_xs = [x]
+                elif y == tip_y:
+                    tip_xs.append(x)
+    if not tip_xs:
+        for y in range(h):
+            for x in range(w):
+                if px[x, y][3] > 100:
+                    tip_xs.append(x)
+                    break
+            if tip_xs:
+                break
+    if not tip_xs:
+        return 0.5, 0.0
+    tip_x = sum(tip_xs) / len(tip_xs)
     return float(tip_x) / w, float(tip_y) / h
 
 
 def load_glove():
     """加载手套图: 旋转 -> 指尖定位 -> 缩放 -> 预乘 alpha BGRA 数据。"""
     global glove_bgra, glove_pw, glove_ph, GLOVE_FINGER_X, GLOVE_FINGER_Y
-    if not (HAS_PIL and HAS_PYWIN32 and HAS_NUMPY):
-        log('错误: 缺少依赖 Pillow/pywin32/numpy, 无法加载手套')
+    if not (HAS_PIL and HAS_PYWIN32):
+        log('错误: 缺少依赖 Pillow/pywin32, 无法加载手套')
         return False
     path = resource_path('glove.png')
     if not os.path.exists(path):
@@ -335,8 +342,7 @@ def load_glove():
         im = Image.open(path).convert('RGBA')
 
         # 指尖定位(缩放前, 归一化坐标与尺寸无关)
-        arr = np.asarray(im, dtype=np.uint8)
-        GLOVE_FINGER_X, GLOVE_FINGER_Y = _find_fingertip_np(arr)
+        GLOVE_FINGER_X, GLOVE_FINGER_Y = _find_fingertip(im)
         log('指尖自动定位: x=%.3f, y=%.3f' % (GLOVE_FINGER_X, GLOVE_FINGER_Y))
 
         # 缩放
@@ -346,12 +352,21 @@ def load_glove():
         glove_pw, glove_ph = im.size
 
         # 预乘 alpha + RGBA->BGRA + 上下翻转(bottom-up DIB)
-        arr = np.asarray(im, dtype=np.uint8)
-        alpha16 = arr[..., 3:4].astype(np.uint16)
-        pre = (arr[..., :3].astype(np.uint16) * alpha16 // 255).astype(np.uint8)
-        bgra = np.dstack((pre[..., 2], pre[..., 1], pre[..., 0], arr[..., 3]))
-        bgra = np.flipud(bgra)
-        glove_bgra = bgra.tobytes()
+        w, h = im.size
+        src = im.tobytes()
+        out = bytearray(w * h * 4)
+        for i in range(w * h):
+            o = i * 4
+            r, g, b, a = src[o], src[o + 1], src[o + 2], src[o + 3]
+            out[o]     = r * a // 255
+            out[o + 1] = g * a // 255
+            out[o + 2] = b * a // 255
+            out[o + 3] = a
+        row = w * 4
+        flipped = bytearray()
+        for y in range(h - 1, -1, -1):
+            flipped += out[y * row:(y + 1) * row]
+        glove_bgra = bytes(flipped)
         log('手套图就绪: %dx%d, BGRA %d bytes' % (glove_pw, glove_ph, len(glove_bgra)))
         return True
     except Exception as e:
