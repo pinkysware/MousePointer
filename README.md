@@ -16,10 +16,10 @@ Windows 上的白手套鼠标指针定位工具。按下全局热键，在指针
 首次运行会在 exe 同目录生成 `hotkeys.json`（配置）与 `mouse_highlight.log`（日志）。
 
 **方式二 · 源码运行**
-需要 Python 3.10+ 及 `Pillow`、`pywin32`、`numpy`：
+需要 Python 3.10+ 及 `Pillow`、`pywin32`（无其他依赖）：
 
 ```bash
-pip install pillow pywin32 numpy
+pip install pillow pywin32
 python mouse_highlight.py
 ```
 
@@ -37,8 +37,21 @@ python mouse_highlight.py
 ## 技术
 
 - **GDI 分层窗口**：`WS_EX_LAYERED` + `UpdateLayeredWindow` 直接合成 PNG 的 per-pixel alpha，规避透明色合成异常
-- **指尖检测**：numpy 分析 alpha 通道定位食指尖端像素
+- **指尖检测**：分析 alpha 通道定位食指尖端像素（纯 Pillow 实现，不依赖 numpy）
 - **热键与托盘**：热键注册 / 注销在同一线程完成；托盘 WndProc 只写标志位、由主线程轮询执行，规避 Tcl 重入崩溃
+
+### 打包 exe
+
+```bash
+pyinstaller --noconsole --onefile ^
+  --exclude-module numpy --exclude-module PIL._avif --exclude-module PIL._webp --exclude-module PIL._imagingcms ^
+  --name MousePointer --icon tray_icon.ico ^
+  --add-data "glove.png;." --add-data "tray_icon.ico;." mouse_highlight.py
+```
+
+- 程序只读 PNG，AVIF / WebP / 色彩管理这三个 Pillow 解码器用不上，排除后 exe 从 33.8 MB 降到约 17 MB
+- `numpy` 会被 Pillow 隐式引入，即使代码不 import 也需显式排除
+- 不要对 onefile 产物再用 UPX：PyInstaller 已压缩内部归档，UPX 几乎压不动（实测仅省 0.7%），且需先关闭 CFG 加固
 
 ## 许可
 
